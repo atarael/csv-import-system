@@ -180,6 +180,16 @@ function App() {
                     ))}
                   </Typography>
                 )}
+                {job.status === 'completed' && job.failedCount > 0 && (
+                <Button
+                  variant="outlined"
+                  sx={{ mt: 2 }}
+                  href={`${API_URL}/jobs/${job._id}/error-report`}
+                >
+                  Download Error Report
+                </Button>
+              )}
+
               </CardContent>
             </Card>
           );
