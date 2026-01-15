@@ -1,90 +1,172 @@
 import fs from 'fs';
 import csv from 'csv-parser';
+import { Types } from 'mongoose';
 import { Job } from '../models/job.model';
 import { Customer } from '../models/customer.model';
 import { validateCustomer } from '../utils/validateCustomer';
-import { Types } from 'mongoose';
 
+const JOB_BATCH_SIZE = 50;
+const CONSUMER_BATCH_SIZE = 50;
 
 export const processCsvJob = async (
   jobId: string,
   filePath: string
-) => {
+): Promise<void> => {
   console.log(`Starting CSV processing for job ${jobId}`);
 
-  // מסמנים שהתחלנו
   await Job.findByIdAndUpdate(jobId, { status: 'processing' });
 
   let rowNumber = 0;
+  let totalRows = 0;
+  let processedRows = 0;
+  let successCount = 0;
+  let failedCount = 0;
+
+  let sinceLastJobFlush = 0;
+
+  // --- buffers ---
+  let rowErrors: any[] = [];
+  let consumerBatch: {
+    rowNumber: number;
+    doc: any;
+  }[] = [];
+
+  // --- flush JOB ---
+  const flushJob = async () => {
+    if (
+      sinceLastJobFlush === 0 &&
+      rowErrors.length === 0
+    ) {
+      return;
+    }
+
+    console.log(`FLUSH JOB at processedRows = ${processedRows}`);
+
+    await Job.findByIdAndUpdate(jobId, {
+      totalRows,
+      processedRows,
+      successCount,
+      failedCount,
+      ...(rowErrors.length > 0
+        ? { $push: { rowErrors: { $each: rowErrors.splice(0) } } }
+        : {}),
+    });
+
+    sinceLastJobFlush = 0;
+  };
+
+  // --- flush CONSUMERS ---
+  const flushConsumers = async () => {
+    if (consumerBatch.length === 0) return;
+
+    const ops = consumerBatch.map(item => ({
+      insertOne: { document: item.doc }
+    }));
+
+    try {
+      const res = await Customer.bulkWrite(ops, { ordered: false });
+      successCount += res.insertedCount;
+    } catch (err: any) {
+      const writeErrors = err.writeErrors || [];
+      const failedIndexes = new Set<number>();
+
+      for (const e of writeErrors) {
+        failedIndexes.add(e.index);
+        failedCount++;
+
+        rowErrors.push({
+          rowNumber: consumerBatch[e.index].rowNumber,
+          error: e.errmsg || 'Duplicate key',
+          rowData: consumerBatch[e.index].doc,
+        });
+      }
+
+      consumerBatch.forEach((item, idx) => {
+        if (!failedIndexes.has(idx)) {
+          successCount++;
+        }
+      });
+    }
+
+    consumerBatch = [];
+  };
 
   return new Promise<void>((resolve, reject) => {
-    fs.createReadStream(filePath)
-      .pipe(csv())
-      .on('data', async (row) => {
-        rowNumber++;
+    const stream = fs.createReadStream(filePath).pipe(csv());
 
-        // מגדילים counters כלליים
-        await Job.findByIdAndUpdate(jobId, {
-          $inc: {
-            totalRows: 1,
-            processedRows: 1,
-          },
-        });
+    stream.on('data', async (row) => {
+      stream.pause();
 
+      rowNumber++;
+      totalRows++;
+      processedRows++;
+      sinceLastJobFlush++;
+
+      const currentRowNumber = rowNumber;
+
+      try {
         const error = validateCustomer(row);
 
         if (error) {
-          await Job.findByIdAndUpdate(jobId, {
-            $inc: { failedCount: 1 },
-            $push: {
-              rowErrors: {
-                rowNumber,
-                error,
-                rowData: row,
-              },
+          failedCount++;
+          rowErrors.push({
+            rowNumber: currentRowNumber,
+            error,
+            rowData: row,
+          });
+        } else {
+          consumerBatch.push({
+            rowNumber: currentRowNumber,
+            doc: {
+              name: row.name,
+              email: row.email,
+              phone: row.phone,
+              company: row.company,
+              jobId: new Types.ObjectId(jobId),
             },
           });
-          return;
+
+          if (consumerBatch.length >= CONSUMER_BATCH_SIZE) {
+            await flushConsumers();
+          }
         }
 
-        try {
-          await Customer.create({
-            name: row.name,
-            email: row.email,
-            phone: row.phone,
-            company: row.company,
-            jobId: new Types.ObjectId(jobId),
-          });
-
-          await Job.findByIdAndUpdate(jobId, {
-            $inc: { successCount: 1 },
-          });
-        } catch (err: any) {
-          await Job.findByIdAndUpdate(jobId, {
-            $inc: { failedCount: 1 },
-            $push: {
-              rowErrors: {
-                rowNumber,
-                error: err.message,
-                rowData: row,
-              },
-            },
-          });
+        if (sinceLastJobFlush >= JOB_BATCH_SIZE) {
+          await flushJob();
         }
-      })
-      .on('end', async () => {
+      } catch (err: any) {
+        failedCount++;
+        rowErrors.push({
+          rowNumber: currentRowNumber,
+          error: err.message,
+          rowData: row,
+        });
+      } finally {
+        stream.resume();
+      }
+    });
+
+    stream.on('end', async () => {
+      try {
+        await flushConsumers();
+        await flushJob();
+
         await Job.findByIdAndUpdate(jobId, {
           status: 'completed',
           completedAt: new Date(),
         });
 
-        fs.unlink(filePath, () => {}); // cleanup
+        fs.unlink(filePath, () => {});
         console.log(`Finished CSV processing for job ${jobId}`);
         resolve();
-      })
-      .on('error', async (err) => {
-        await Job.findByIdAndUpdate(jobId, { status: 'failed' });
+      } catch (err) {
         reject(err);
-      });
+      }
+    });
+
+    stream.on('error', async (err) => {
+      await Job.findByIdAndUpdate(jobId, { status: 'failed' });
+      reject(err);
+    });
   });
 };

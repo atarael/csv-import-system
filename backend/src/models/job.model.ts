@@ -1,25 +1,6 @@
-import { Schema, model, Document } from 'mongoose';
+import { Schema, model, InferSchemaType } from 'mongoose';
 
-export interface JobDocument extends Document {
-  filename: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-
-  totalRows: number;
-  processedRows: number;
-  successCount: number;
-  failedCount: number;
-
-  rowErrors: {
-    rowNumber: number;
-    error: string;
-    rowData: Record<string, any>;
-  }[];
-
-  createdAt: Date;
-  completedAt?: Date;
-}
-
-const JobSchema = new Schema<JobDocument>(
+const JobSchema = new Schema(
   {
     filename: { type: String, required: true },
 
@@ -34,13 +15,16 @@ const JobSchema = new Schema<JobDocument>(
     successCount: { type: Number, default: 0 },
     failedCount: { type: Number, default: 0 },
 
-    rowErrors: [
-      {
-        rowNumber: Number,
-        error: String,
-        rowData: Schema.Types.Mixed,
-      },
-    ],
+    rowErrors: {
+      type: [
+        {
+          rowNumber: Number,
+          error: String,
+          rowData: Schema.Types.Mixed,
+        },
+      ],
+      default: [],
+    },
 
     completedAt: Date,
   },
@@ -48,5 +32,8 @@ const JobSchema = new Schema<JobDocument>(
     timestamps: { createdAt: true, updatedAt: false },
   }
 );
+
+
+export type JobDocument = InferSchemaType<typeof JobSchema>;
 
 export const Job = model<JobDocument>('Job', JobSchema);
