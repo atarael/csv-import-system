@@ -5,10 +5,12 @@ import {
   getJobs,
   getJobById,
 } from '../controllers/job.controller';
+import { streamJobs } from '../controllers/job.controller';
 
 const router = Router();
 const upload = multer({ dest: 'uploads/' });
 
+router.get('/stream', streamJobs);
 router.post('/upload', upload.single('file'), uploadJob);
 router.get('/', getJobs);
 router.get('/:id', getJobById);

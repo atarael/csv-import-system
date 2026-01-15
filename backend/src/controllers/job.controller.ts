@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { createJob } from '../services/job.service';
 import { Job } from '../models/job.model';
 import { Types } from 'mongoose';
+import { sseClients } from '../sse/sseClients';
 
 export const uploadJob = async (req: Request, res: Response) => {
   if (!req.file) {
@@ -40,7 +41,32 @@ export const getJobById = async (req: Request, res: Response) => {
   if (!job) {
     return res.status(404).json({ message: 'Job not found' });
   }
+  
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+  });
 
   res.json(job);
 };
+
+export const streamJobs = (req: Request, res: Response) => {
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+
+  res.flushHeaders();
+
+  // רושמים את הקליינט
+  sseClients.add(res);
+
+  // כשקליינט מתנתק – מנקים
+  req.on('close', () => {
+    sseClients.delete(res);
+  });
+};
+
 

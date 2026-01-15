@@ -4,9 +4,25 @@ import { Types } from 'mongoose';
 import { Job } from '../models/job.model';
 import { Customer } from '../models/customer.model';
 import { validateCustomer } from '../utils/validateCustomer';
+import { sseClients } from '../sse/sseClients';
 
 const JOB_BATCH_SIZE = 50;
 const CONSUMER_BATCH_SIZE = 50;
+
+/* =========================
+   🔥 Single Source of Truth
+   ========================= */
+const updateAndBroadcastJob = async (
+  jobId: string,
+  update: any
+) => {
+  const job = await Job.findByIdAndUpdate(jobId, update, { new: true });
+  if (!job) return;
+
+  for (const client of sseClients) {
+    client.write(`data: ${JSON.stringify(job)}\n\n`);
+  }
+};
 
 export const processCsvJob = async (
   jobId: string,
@@ -14,14 +30,13 @@ export const processCsvJob = async (
 ): Promise<void> => {
   console.log(`Starting CSV processing for job ${jobId}`);
 
-  await Job.findByIdAndUpdate(jobId, { status: 'processing' });
+  await updateAndBroadcastJob(jobId, { status: 'processing' });
 
   let rowNumber = 0;
   let totalRows = 0;
   let processedRows = 0;
   let successCount = 0;
   let failedCount = 0;
-
   let sinceLastJobFlush = 0;
 
   // --- buffers ---
@@ -31,18 +46,13 @@ export const processCsvJob = async (
     doc: any;
   }[] = [];
 
-  // --- flush JOB ---
+  /* =================
+     🔁 Flush JOB
+     ================= */
   const flushJob = async () => {
-    if (
-      sinceLastJobFlush === 0 &&
-      rowErrors.length === 0
-    ) {
-      return;
-    }
+    if (sinceLastJobFlush === 0 && rowErrors.length === 0) return;
 
-    console.log(`FLUSH JOB at processedRows = ${processedRows}`);
-
-    await Job.findByIdAndUpdate(jobId, {
+    await updateAndBroadcastJob(jobId, {
       totalRows,
       processedRows,
       successCount,
@@ -55,7 +65,9 @@ export const processCsvJob = async (
     sinceLastJobFlush = 0;
   };
 
-  // --- flush CONSUMERS ---
+  /* =====================
+     🔁 Flush CONSUMERS
+     ===================== */
   const flushConsumers = async () => {
     if (consumerBatch.length === 0) return;
 
@@ -146,12 +158,15 @@ export const processCsvJob = async (
       }
     });
 
+    /* =================
+       ✅ END – COMPLETED
+       ================= */
     stream.on('end', async () => {
       try {
         await flushConsumers();
         await flushJob();
 
-        await Job.findByIdAndUpdate(jobId, {
+        await updateAndBroadcastJob(jobId, {
           status: 'completed',
           completedAt: new Date(),
         });
@@ -165,7 +180,7 @@ export const processCsvJob = async (
     });
 
     stream.on('error', async (err) => {
-      await Job.findByIdAndUpdate(jobId, { status: 'failed' });
+      await updateAndBroadcastJob(jobId, { status: 'failed' });
       reject(err);
     });
   });
