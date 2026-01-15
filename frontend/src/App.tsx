@@ -57,7 +57,35 @@ function App() {
 
   useEffect(() => {
     fetchJobs();
-  }, []);
+    const es = new EventSource(`${API_URL}/jobs/stream`);
+
+    es.onmessage = (event) => {
+      const job: Job = JSON.parse(event.data);
+
+      setJobs((prevJobs) => {
+        const index = prevJobs.findIndex((j) => j._id === job._id);
+
+        // 🆕 Job חדש
+        if (index === -1) {
+          return [job, ...prevJobs];
+        }
+
+        // 🔁 עדכון Job קיים
+        const updated = [...prevJobs];
+        updated[index] = job;
+        return updated;
+      });
+    };
+
+    es.onerror = (err) => {
+      console.error('SSE error', err);
+      es.close();
+    };
+
+    return () => {
+      es.close();
+    };
+    }, []);
 
   const handleUpload = async () => {
     if (!file) return;
