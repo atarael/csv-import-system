@@ -7,6 +7,10 @@ import {
   Card,
   CardContent,
   Stack,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  Divider,
 } from '@mui/material';
 
 /* ===== Types ===== */
@@ -21,18 +25,17 @@ interface Job {
   _id: string;
   filename: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
-
   totalRows: number;
   processedRows: number;
   successCount: number;
   failedCount: number;
-
   rowErrors?: JobError[] | null;
 }
 
 /* ===== Config ===== */
 
 const API_URL = 'http://localhost:3000/api';
+const WS_URL = 'ws://localhost:3000';
 
 /* ===== App ===== */
 
@@ -42,6 +45,10 @@ function App() {
   const [lastJobId, setLastJobId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // 🔴 state לחלון שגיאות
+  const [openErrorsForJob, setOpenErrorsForJob] = useState<Job | null>(null);
+
+  /* ===== Initial fetch ===== */
   const fetchJobs = async () => {
     setLoading(true);
     try {
@@ -55,38 +62,39 @@ function App() {
     }
   };
 
+  /* ===== WebSocket ===== */
   useEffect(() => {
     fetchJobs();
-    const es = new EventSource(`${API_URL}/jobs/stream`);
 
-    es.onmessage = (event) => {
-      const job: Job = JSON.parse(event.data);
+    const ws = new WebSocket(WS_URL);
 
-      setJobs((prevJobs) => {
-        const index = prevJobs.findIndex((j) => j._id === job._id);
+    ws.onopen = () => console.log('WebSocket connected');
 
-        // 🆕 Job חדש
-        if (index === -1) {
-          return [job, ...prevJobs];
-        }
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      console.log('WS MESSAGE:', message);
 
-        // 🔁 עדכון Job קיים
-        const updated = [...prevJobs];
-        updated[index] = job;
-        return updated;
-      });
+      if (message.type === 'JOB_UPDATED') {
+        const job: Job = message.payload;
+
+        setJobs((prev) => {
+          const idx = prev.findIndex((j) => j._id === job._id);
+          if (idx === -1) return [job, ...prev];
+
+          const updated = [...prev];
+          updated[idx] = job;
+          return updated;
+        });
+      }
     };
 
-    es.onerror = (err) => {
-      console.error('SSE error', err);
-      es.close();
-    };
+    ws.onerror = (err) => console.error('WebSocket error', err);
+    ws.onclose = () => console.log('WebSocket disconnected');
 
-    return () => {
-      es.close();
-    };
-    }, []);
+    return () => ws.close();
+  }, []);
 
+  /* ===== Upload ===== */
   const handleUpload = async () => {
     if (!file) return;
 
@@ -98,10 +106,8 @@ function App() {
         method: 'POST',
         body: formData,
       });
-
       const data = await res.json();
       setLastJobId(data.jobId);
-      fetchJobs();
     } catch (err) {
       console.error('Upload failed', err);
     }
@@ -158,7 +164,7 @@ function App() {
                 />
 
                 <Typography variant="body2">
-                  Processed: {job.processedRows} 
+                  Processed: {job.processedRows}
                 </Typography>
 
                 <Typography variant="body2" color="success.main">
@@ -169,32 +175,77 @@ function App() {
                   Failed: {job.failedCount}
                 </Typography>
 
-                {/* Errors — SAFE RENDERING */}
+                {/* ✅ Row Errors Button */}
                 {Array.isArray(job.rowErrors) && job.rowErrors.length > 0 && (
-                  <Typography variant="body2" color="error" sx={{ mt: 1 }}>
-                    Errors:
-                    {job.rowErrors.map((e) => (
-                      <div key={`${job._id}-${e.rowNumber}`}>
-                        Row {e.rowNumber}: {e.error}
-                      </div>
-                    ))}
-                  </Typography>
+                  <Button
+                    variant="outlined"
+                    color="error"
+                    size="small"
+                    sx={{ mt: 1 }}
+                    onClick={() => setOpenErrorsForJob(job)}
+                  >
+                    Row Errors ({job.rowErrors.length})
+                  </Button>
                 )}
-                {job.status === 'completed' && job.failedCount > 0 && (
-                <Button
-                  variant="outlined"
-                  sx={{ mt: 2 }}
-                  href={`${API_URL}/jobs/${job._id}/error-report`}
-                >
-                  Download Error Report
-                </Button>
-              )}
 
+                {/* Download report */}
+                {job.status === 'completed' && job.failedCount > 0 && (
+                  <Button
+                    variant="outlined"
+                    sx={{ mt: 2, ml: 1 }}
+                    href={`${API_URL}/jobs/${job._id}/error-report`}
+                  >
+                    Download Error Report
+                  </Button>
+                )}
               </CardContent>
             </Card>
           );
         })}
       </Stack>
+
+      {/* 🔴 Errors Dialog */}
+      <Dialog
+        open={Boolean(openErrorsForJob)}
+        onClose={() => setOpenErrorsForJob(null)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          Row Errors – {openErrorsForJob?.filename}
+        </DialogTitle>
+
+        <DialogContent dividers>
+          <Stack spacing={2}>
+            {openErrorsForJob?.rowErrors?.map((err, idx) => (
+              <div key={idx}>
+                <Typography variant="subtitle2">
+                  ❌ Row {err.rowNumber}
+                </Typography>
+
+                <Typography color="error">
+                  {err.error}
+                </Typography>
+
+                {err.rowData && (
+                  <pre
+                    style={{
+                      background: '#f5f5f5',
+                      padding: 8,
+                      fontSize: 12,
+                      overflowX: 'auto',
+                    }}
+                  >
+                    {JSON.stringify(err.rowData, null, 2)}
+                  </pre>
+                )}
+
+                <Divider />
+              </div>
+            ))}
+          </Stack>
+        </DialogContent>
+      </Dialog>
     </Container>
   );
 }
