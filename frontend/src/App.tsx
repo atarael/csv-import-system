@@ -13,8 +13,6 @@ import {
   Divider,
 } from '@mui/material';
 
-/* ===== Types ===== */
-
 interface JobError {
   rowNumber: number;
   error: string;
@@ -32,84 +30,99 @@ interface Job {
   rowErrors?: JobError[] | null;
 }
 
-/* ===== Config ===== */
-
 const API_URL = 'http://localhost:3000/api';
 const WS_URL = 'ws://localhost:3000';
-
-/* ===== App ===== */
+const WS_EVENT_JOB_UPDATED = 'JOB_UPDATED' as const;
 
 function App() {
-  const [file, setFile] = useState<File | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [lastJobId, setLastJobId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [lastCreatedJobId, setLastCreatedJobId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorsDialogJob, setErrorsDialogJob] = useState<Job | null>(null);
 
-  // 🔴 state לחלון שגיאות
-  const [openErrorsForJob, setOpenErrorsForJob] = useState<Job | null>(null);
-
-  /* ===== Initial fetch ===== */
   const fetchJobs = async () => {
-    setLoading(true);
+    setIsLoading(true);
     try {
-      const res = await fetch(`${API_URL}/jobs`);
-      const data = await res.json();
-      setJobs(data);
-    } catch (err) {
-      console.error('Failed to fetch jobs', err);
+      const response = await fetch(`${API_URL}/jobs`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch jobs');
+      }
+      const jobsData = await response.json();
+      setJobs(jobsData);
+    } catch (error) {
+      console.error('[Jobs] Fetch failed:', error);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
-  /* ===== WebSocket ===== */
   useEffect(() => {
     fetchJobs();
 
-    const ws = new WebSocket(WS_URL);
+    const socket = new WebSocket(WS_URL);
 
-    ws.onopen = () => console.log('WebSocket connected');
+    socket.onopen = () => {
+      console.info('[WS] Connected');
+    };
 
-    ws.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      console.log('WS MESSAGE:', message);
+    socket.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
 
-      if (message.type === 'JOB_UPDATED') {
-        const job: Job = message.payload;
+        if (message.type !== WS_EVENT_JOB_UPDATED) return;
 
-        setJobs((prev) => {
-          const idx = prev.findIndex((j) => j._id === job._id);
-          if (idx === -1) return [job, ...prev];
+        const updatedJob: Job = message.payload;
 
-          const updated = [...prev];
-          updated[idx] = job;
-          return updated;
+        setJobs((prevJobs) => {
+          const existingIndex = prevJobs.findIndex(
+            (job) => job._id === updatedJob._id
+          );
+
+          if (existingIndex === -1) {
+            return [updatedJob, ...prevJobs];
+          }
+
+          const nextJobs = [...prevJobs];
+          nextJobs[existingIndex] = updatedJob;
+          return nextJobs;
         });
+      } catch (error) {
+        console.error('[WS] Invalid message:', error);
       }
     };
 
-    ws.onerror = (err) => console.error('WebSocket error', err);
-    ws.onclose = () => console.log('WebSocket disconnected');
+    socket.onerror = (error) => {
+      console.error('[WS] Error:', error);
+    };
 
-    return () => ws.close();
+    socket.onclose = () => {
+      console.warn('[WS] Disconnected');
+    };
+
+    return () => socket.close();
   }, []);
 
-  /* ===== Upload ===== */
   const handleUpload = async () => {
-    if (!file) return;
+    if (!selectedFile) return;
 
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', selectedFile);
 
     try {
-      const res = await fetch(`${API_URL}/jobs/upload`, {
+      const response = await fetch(`${API_URL}/jobs/upload`, {
         method: 'POST',
         body: formData,
       });
-      const data = await res.json();
-      setLastJobId(data.jobId);
-    } catch (err) {
-      console.error('Upload failed', err);
+
+      if (!response.ok) {
+        throw new Error('Upload failed');
+      }
+
+      const { jobId } = await response.json();
+      setLastCreatedJobId(jobId);
+    } catch (error) {
+      console.error('[Upload] Failed:', error);
     }
   };
 
@@ -119,21 +132,22 @@ function App() {
         CSV Import Jobs
       </Typography>
 
-      {/* Upload */}
       <Stack direction="row" spacing={2} mb={3}>
         <input
           type="file"
           accept=".csv"
-          onChange={(e) => setFile(e.target.files?.[0] || null)}
+          onChange={(e) =>
+            setSelectedFile(e.target.files?.[0] ?? null)
+          }
         />
         <Button variant="contained" onClick={handleUpload}>
           Upload
         </Button>
       </Stack>
 
-      {lastJobId && (
+      {lastCreatedJobId && (
         <Typography color="success.main" mb={2}>
-          Job created successfully. Job ID: {lastJobId}
+          Job created successfully. ID: {lastCreatedJobId}
         </Typography>
       )}
 
@@ -141,9 +155,8 @@ function App() {
         Refresh
       </Button>
 
-      {loading && <LinearProgress sx={{ mb: 2 }} />}
+      {isLoading && <LinearProgress sx={{ mb: 2 }} />}
 
-      {/* Jobs List */}
       <Stack spacing={2}>
         {jobs.map((job) => {
           const progress =
@@ -175,59 +188,58 @@ function App() {
                   Failed: {job.failedCount}
                 </Typography>
 
-                {/* ✅ Row Errors Button */}
-                {Array.isArray(job.rowErrors) && job.rowErrors.length > 0 && (
-                  <Button
-                    variant="outlined"
-                    color="error"
-                    size="small"
-                    sx={{ mt: 1 }}
-                    onClick={() => setOpenErrorsForJob(job)}
-                  >
-                    Row Errors ({job.rowErrors.length})
-                  </Button>
-                )}
+                {Array.isArray(job.rowErrors) &&
+                  job.rowErrors.length > 0 && (
+                    <Button
+                      variant="outlined"
+                      color="error"
+                      size="small"
+                      sx={{ mt: 1 }}
+                      onClick={() => setErrorsDialogJob(job)}
+                    >
+                      Row Errors ({job.rowErrors.length})
+                    </Button>
+                  )}
 
-                {/* Download report */}
-                {job.status === 'completed' && job.failedCount > 0 && (
-                  <Button
-                    variant="outlined"
-                    sx={{ mt: 2, ml: 1 }}
-                    href={`${API_URL}/jobs/${job._id}/error-report`}
-                  >
-                    Download Error Report
-                  </Button>
-                )}
+                {job.status === 'completed' &&
+                  job.failedCount > 0 && (
+                    <Button
+                      variant="outlined"
+                      sx={{ mt: 2, ml: 1 }}
+                      href={`${API_URL}/jobs/${job._id}/error-report`}
+                    >
+                      Download Error Report
+                    </Button>
+                  )}
               </CardContent>
             </Card>
           );
         })}
       </Stack>
 
-      {/* 🔴 Errors Dialog */}
       <Dialog
-        open={Boolean(openErrorsForJob)}
-        onClose={() => setOpenErrorsForJob(null)}
+        open={Boolean(errorsDialogJob)}
+        onClose={() => setErrorsDialogJob(null)}
         maxWidth="md"
         fullWidth
       >
         <DialogTitle>
-          Row Errors – {openErrorsForJob?.filename}
+          Row Errors – {errorsDialogJob?.filename}
         </DialogTitle>
 
         <DialogContent dividers>
           <Stack spacing={2}>
-            {openErrorsForJob?.rowErrors?.map((err, idx) => (
-              <div key={idx}>
+            {errorsDialogJob?.rowErrors?.map((error, index) => (
+              <div key={index}>
                 <Typography variant="subtitle2">
-                  ❌ Row {err.rowNumber}
+                  Row {error.rowNumber}
                 </Typography>
 
                 <Typography color="error">
-                  {err.error}
+                  {error.error}
                 </Typography>
 
-                {err.rowData && (
+                {error.rowData && (
                   <pre
                     style={{
                       background: '#f5f5f5',
@@ -236,7 +248,7 @@ function App() {
                       overflowX: 'auto',
                     }}
                   >
-                    {JSON.stringify(err.rowData, null, 2)}
+                    {JSON.stringify(error.rowData, null, 2)}
                   </pre>
                 )}
 
