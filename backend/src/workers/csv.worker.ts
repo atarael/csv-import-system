@@ -1,16 +1,21 @@
 import fs from 'fs';
 import csv from 'csv-parser';
 import { Types } from 'mongoose';
+
 import { Job } from '../models/job.model';
 import { Customer } from '../models/customer.model';
 import { validateCustomer } from '../utils/validateCustomer';
-import { sseClients } from '../sse/sseClients';
+import { broadcast } from '../ws/wsServer';
 
+/* =========================
+   Configuration
+   ========================= */
 const JOB_BATCH_SIZE = 50;
 const CONSUMER_BATCH_SIZE = 50;
 
 /* =========================
-   🔥 Single Source of Truth
+   Job updater & notifier
+   Single source of truth
    ========================= */
 const updateAndBroadcastJob = async (
   jobId: string,
@@ -19,11 +24,15 @@ const updateAndBroadcastJob = async (
   const job = await Job.findByIdAndUpdate(jobId, update, { new: true });
   if (!job) return;
 
-  for (const client of sseClients) {
-    client.write(`data: ${JSON.stringify(job)}\n\n`);
-  }
+  broadcast({
+    type: 'JOB_UPDATED',
+    payload: job,
+  });
 };
 
+/* =========================
+   CSV processing worker
+   ========================= */
 export const processCsvJob = async (
   jobId: string,
   filePath: string
@@ -39,7 +48,7 @@ export const processCsvJob = async (
   let failedCount = 0;
   let sinceLastJobFlush = 0;
 
-  // --- buffers ---
+  /* --- buffers --- */
   let rowErrors: any[] = [];
   let consumerBatch: {
     rowNumber: number;
@@ -47,7 +56,7 @@ export const processCsvJob = async (
   }[] = [];
 
   /* =================
-     🔁 Flush JOB
+     Flush job progress
      ================= */
   const flushJob = async () => {
     if (sinceLastJobFlush === 0 && rowErrors.length === 0) return;
@@ -66,13 +75,13 @@ export const processCsvJob = async (
   };
 
   /* =====================
-     🔁 Flush CONSUMERS
+     Flush consumers batch
      ===================== */
   const flushConsumers = async () => {
     if (consumerBatch.length === 0) return;
 
     const ops = consumerBatch.map(item => ({
-      insertOne: { document: item.doc }
+      insertOne: { document: item.doc },
     }));
 
     try {
@@ -103,6 +112,9 @@ export const processCsvJob = async (
     consumerBatch = [];
   };
 
+  /* =====================
+     Stream processing
+     ===================== */
   return new Promise<void>((resolve, reject) => {
     const stream = fs.createReadStream(filePath).pipe(csv());
 
@@ -159,7 +171,7 @@ export const processCsvJob = async (
     });
 
     /* =================
-       ✅ END – COMPLETED
+       End – completed
        ================= */
     stream.on('end', async () => {
       try {
