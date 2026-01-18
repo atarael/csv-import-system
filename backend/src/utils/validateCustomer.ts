@@ -1,10 +1,20 @@
-export const validateCustomer = (row: any): string | null => {
-  if (!row.name) return 'Missing name';
-  if (!row.email) return 'Missing email';
-  if (!row.company) return 'Missing company';
+type CustomerInput = {
+  name?: string;
+  email?: string;
+  company?: string;
+  phone?: string;
+};
 
-  // ולידציה מאוד בסיסית למייל (מספיק לתרגיל)
-  if (!row.email.includes('@')) return 'Invalid email';
+export const validateCustomer = (
+  input: CustomerInput
+): string | null => {
+  if (!input.name) return 'Missing name';
+  if (!input.email) return 'Missing email';
+  if (!input.company) return 'Missing company';
 
-  return null; // תקין
+  if (!input.email.includes('@')) {
+    return 'Invalid email';
+  }
+
+  return null;
 };

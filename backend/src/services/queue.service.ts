@@ -1,4 +1,4 @@
-import { processCsvJob } from '../workers/csv.worker';
+import { processCsvJob } from '../workers/csv/csv.worker';
 
 type QueueItem = {
   jobId: string;
@@ -8,19 +8,30 @@ type QueueItem = {
 const queue: QueueItem[] = [];
 let isProcessing = false;
 
-export const enqueueJob = (jobId: string, filePath: string) => {
+export const enqueueJob = (jobId: string, filePath: string): void => {
   queue.push({ jobId, filePath });
-  processQueue();
+  void processQueue();
 };
 
-const processQueue = async () => {
+const processQueue = async (): Promise<void> => {
   if (isProcessing || queue.length === 0) return;
 
   isProcessing = true;
-  const item = queue.shift()!;
+  const item = queue.shift();
+  if (!item) {
+    isProcessing = false;
+    return;
+  }
 
-  await processCsvJob(item.jobId, item.filePath);
-
-  isProcessing = false;
-  processQueue();
+  try {
+    await processCsvJob(item.jobId, item.filePath);
+  } catch (error) {
+    console.error('[Queue] Job processing failed', {
+      jobId: item.jobId,
+      error,
+    });
+  } finally {
+    isProcessing = false;
+    void processQueue();
+  }
 };

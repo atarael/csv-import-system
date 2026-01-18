@@ -2,14 +2,21 @@ import app from './app';
 import { connectDB } from './config/db';
 import { initWebSocket } from './ws/wsServer';
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
-connectDB();
+const startServer = async () => {
+  try {
+    await connectDB();
 
-// ⬅️ חשוב: לשמור את ה-server
-const server = app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+    const server = app.listen(PORT, () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
 
-// ⬅️ עכשיו זה עובד
-initWebSocket(server);
+    initWebSocket(server);
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+startServer();

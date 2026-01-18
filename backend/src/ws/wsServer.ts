@@ -1,24 +1,36 @@
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
+import { Server as HttpServer } from 'http';
 
-let wss: WebSocketServer;
+let webSocketServer: WebSocketServer | null = null;
 
-export const initWebSocket = (server: any) => {
-  console.log('initWebSocket CALLED')
-  wss = new WebSocketServer({ server });
+export const initWebSocket = (server: HttpServer): void => {
+  try {
+    webSocketServer = new WebSocketServer({ server });
 
-  wss.on('connection', () => {
-    console.log('WebSocket client connected');
-  });
+    webSocketServer.on('connection', () => {
+      console.info('[WS] Client connected');
+    });
+  } catch (error) {
+    console.error('[WS] Failed to initialize WebSocket server', error);
+    throw error;
+  }
 };
 
-export const broadcast = (message: any) => {
-  if (!wss) return;
+export const broadcast = (message: unknown): void => {
+  if (!webSocketServer) return;
 
-  const data = JSON.stringify(message);
+  let payload: string;
 
-  wss.clients.forEach(client => {
-    if (client.readyState === 1) {
-      client.send(data);
+  try {
+    payload = JSON.stringify(message);
+  } catch (error) {
+    console.error('[WS] Failed to serialize message', error);
+    return;
+  }
+
+  webSocketServer.clients.forEach((client: WebSocket) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
     }
   });
 };
