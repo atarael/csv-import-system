@@ -1,4 +1,5 @@
 import { Customer } from '../../models/customer.model';
+import { Types } from 'mongoose';
 
 type Counters = {
   successCount: number;
@@ -11,9 +12,17 @@ type RowError = {
   rowData: unknown;
 };
 
+type CustomerDocument = {
+  name: string;
+  email: string;
+  company: string;
+  phone?: string;
+  jobId: Types.ObjectId;
+};
+
 type ConsumerItem = {
   rowNumber: number;
-  doc: any;
+  doc: CustomerDocument;
 };
 
 export const flushConsumers = async (
@@ -30,22 +39,34 @@ export const flushConsumers = async (
   try {
     const result = await Customer.bulkWrite(ops, { ordered: false });
     counters.successCount += result.insertedCount;
-  } catch (error: any) {
-    const writeErrors = error.writeErrors || [];
+  } catch (err: unknown) {
+    const error = err as {
+      writeErrors?: Array<{
+        index: number;
+        errmsg?: string;
+      }>;
+    };
+
+    const writeErrors = error.writeErrors ?? [];
     const failedIndexes = new Set<number>();
 
     for (const e of writeErrors) {
       failedIndexes.add(e.index);
       counters.failedCount++;
 
+      const message =
+        typeof e.errmsg === 'string' && e.errmsg.length > 0
+          ? e.errmsg
+          : 'Insert failed';
+
       rowErrors.push({
         rowNumber: batch[e.index].rowNumber,
-        error: e.errmsg || 'Duplicate key',
+        error: message,
         rowData: batch[e.index].doc,
       });
     }
 
-    batch.forEach((item, index) => {
+    batch.forEach((_, index) => {
       if (!failedIndexes.has(index)) {
         counters.successCount++;
       }

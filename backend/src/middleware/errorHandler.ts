@@ -2,14 +2,10 @@ import { Request, Response, NextFunction } from 'express';
 
 export class AppError extends Error {
   statusCode: number;
-  isOperational: boolean;
 
   constructor(message: string, statusCode = 500) {
     super(message);
     this.statusCode = statusCode;
-    this.isOperational = true;
-
-    Error.captureStackTrace(this, this.constructor);
   }
 }
 
@@ -27,15 +23,9 @@ export const errorHandler = (
       ? error.message
       : 'Internal server error';
 
-  console.error('[ERROR]', {
-    method: req.method,
-    path: req.originalUrl,
-    message: error.message,
-    stack:
-      process.env.NODE_ENV === 'development'
-        ? error.stack
-        : undefined,
-  });
+  console.error(
+    `[ERROR] ${req.method} ${req.originalUrl} - ${error.message}`
+  );
 
   res.status(statusCode).json({ message });
 };
